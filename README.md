@@ -18,21 +18,9 @@ During setup, you'll need:
 
 - **Email**: Your "OBI" account email address
 - **Password**: Your "OBI" account password
-- **Country**: Country code (default "DE")
+- **Country**: Country code (default: DE for Germany)
 
-## Data retrieved
-
-The integration retrieves:
-
-- Meter Reading
-- Battery Level
-- Online Status
-- Connection Strength
-- Last Record Received At
-
-## API Details & Credits
-
-## Data retrieved
+## API Details
 
 The integration retrieves:
 
