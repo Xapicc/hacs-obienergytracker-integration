@@ -32,6 +32,16 @@ The integration retrieves:
 
 ## API Details & Credits
 
+## Data retrieved
+
+The integration retrieves:
+
+- Meter Reading
+- Battery Level
+- Online Status
+- Connection Strength
+- Last Record Received At
+
 ---
 
 *Disclaimer: This integration is not affiliated with or endorsed by OBI. Use at your own risk.*
