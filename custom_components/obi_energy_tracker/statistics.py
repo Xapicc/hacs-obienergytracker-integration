@@ -1,11 +1,13 @@
 """Long-term statistics import for Obi EnergyTracker.
 
 The Energy dashboard works in hourly buckets. Publishing sensor states alone
-leaves those buckets aligned to whenever Home Assistant happened to poll, and
-gives no history from before the integration was installed. The hourly
-resolution of /historical-data already returns hour-aligned energy totals, so
-importing them as external statistics gives the dashboard correct buckets and
-backfilled history for free.
+leaves those buckets aligned to whenever Home Assistant happened to poll, so
+hour-aligned totals are imported as external statistics instead.
+
+Those totals are derived from the cumulative meter register (see
+hourly_energy_from_meter): the API's own hourly resolution returns a single
+aggregate record for the whole requested window, not one record per hour, so it
+cannot be used to build a series.
 """
 
 from __future__ import annotations
@@ -27,6 +29,13 @@ try:  # Home Assistant 2025.2+
     _MEAN_TYPE_NONE: Any | None = StatisticMeanType.NONE
 except ImportError:  # older cores only understand has_mean
     _MEAN_TYPE_NONE = None
+
+try:  # unit_class became expected in 2026.x
+    from homeassistant.util.unit_conversion import EnergyConverter
+
+    _UNIT_CLASS: str | None = EnergyConverter.UNIT_CLASS
+except (ImportError, AttributeError):
+    _UNIT_CLASS = None
 from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
@@ -116,6 +125,11 @@ async def async_import_hourly_statistics(
         metadata["mean_type"] = _MEAN_TYPE_NONE
     else:
         metadata["has_mean"] = False
+
+    # unit_class tells the recorder which converter applies, so the dashboard
+    # can display Wh as kWh. Also required from 2026.11.
+    if _UNIT_CLASS is not None:
+        metadata["unit_class"] = _UNIT_CLASS
 
     async_add_external_statistics(hass, metadata, statistics)
     _LOGGER.debug(
