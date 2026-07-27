@@ -7,11 +7,17 @@ import logging
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
 from .api import ObiEnergyTrackerAPI, derive_power_w, sum_values
 from .const import DOMAIN
+from .statistics import (
+    STATISTIC_CONSUMPTION,
+    STATISTIC_PRODUCTION,
+    async_import_hourly_statistics,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -82,7 +88,7 @@ class ObiEnergyTrackerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
     async def _async_update_slow_data(self) -> None:
-        """Refresh device status and the daily/hourly aggregates if due."""
+        """Refresh device status and aggregates, and top up statistics."""
         now = dt_util.utcnow()
         if (
             self._slow_fetched_at is not None
@@ -97,6 +103,9 @@ class ObiEnergyTrackerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             start_of_day, "negative_energy"
         )
         hourly = await self.api.async_get_hourly_data(num_days=DAYS_OF_HISTORY)
+        hourly_export = await self.api.async_get_hourly_data(
+            num_days=DAYS_OF_HISTORY, measure="negative_energy"
+        )
 
         # Keep the previous values on a failed refresh rather than blanking the
         # sensors; the next cycle retries.
@@ -111,3 +120,28 @@ class ObiEnergyTrackerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "hourly": hourly,
         }
         self._slow_fetched_at = now
+
+        await self._async_import_statistics(hourly, hourly_export)
+
+    async def _async_import_statistics(
+        self, hourly: Any, hourly_export: Any
+    ) -> None:
+        """Feed the hourly series into long-term statistics.
+
+        Failures here must not take the sensors down with them, so they are
+        logged and swallowed.
+        """
+        for statistic_id, records in (
+            (STATISTIC_CONSUMPTION, hourly),
+            (STATISTIC_PRODUCTION, hourly_export),
+        ):
+            if records is None:
+                continue
+            try:
+                await async_import_hourly_statistics(
+                    self.hass, statistic_id, records
+                )
+            except (HomeAssistantError, KeyError, TypeError, ValueError) as err:
+                _LOGGER.warning(
+                    "Failed to import statistics for %s: %s", statistic_id, err
+                )
