@@ -20,6 +20,13 @@ from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
     get_last_statistics,
 )
+
+try:  # Home Assistant 2025.2+
+    from homeassistant.components.recorder.models import StatisticMeanType
+
+    _MEAN_TYPE_NONE: Any | None = StatisticMeanType.NONE
+except ImportError:  # older cores only understand has_mean
+    _MEAN_TYPE_NONE = None
 from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
@@ -95,13 +102,19 @@ async def async_import_hourly_statistics(
         return
 
     metadata = StatisticMetaData(
-        has_mean=False,
         has_sum=True,
         name=STATISTIC_NAMES.get(statistic_id, statistic_id),
         source=DOMAIN,
         statistic_id=statistic_id,
         unit_of_measurement=UnitOfEnergy.WATT_HOUR,
     )
+    # has_mean is deprecated and stops working in 2026.11; mean_type replaces
+    # it. Energy totals have no meaningful mean, hence NONE.
+    if _MEAN_TYPE_NONE is not None:
+        metadata["mean_type"] = _MEAN_TYPE_NONE
+    else:
+        metadata["has_mean"] = False
+
     async_add_external_statistics(hass, metadata, statistics)
     _LOGGER.debug(
         "Imported %d hourly statistics rows for %s (running total %.0f Wh)",
