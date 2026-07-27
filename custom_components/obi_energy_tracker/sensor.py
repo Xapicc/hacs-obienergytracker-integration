@@ -11,11 +11,13 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorStateClass,
 )
+from homeassistant.const import UnitOfEnergy, UnitOfPower
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import ObiEnergyTrackerConfigEntry
+from .api import latest_value
 from .const import DOMAIN
 from .coordinator import ObiEnergyTrackerCoordinator
 
@@ -34,6 +36,11 @@ async def async_setup_entry(
 
     sensors = [
         ObiMeterReadingSensor(coordinator),
+        ObiMeterExportSensor(coordinator),
+        ObiPowerSensor(coordinator),
+        ObiExportPowerSensor(coordinator),
+        ObiDailyEnergySensor(coordinator),
+        ObiDailyExportEnergySensor(coordinator),
         ObiBatteryLevelSensor(coordinator),
         ObiIsOnlineSensor(coordinator),
         ObiConnectionStrengthSensor(coordinator),
@@ -58,14 +65,18 @@ class ObiEnergySensorBase(CoordinatorEntity[ObiEnergyTrackerCoordinator], Sensor
         }
 
 
-class ObiMeterReadingSensor(ObiEnergySensorBase):
-    """Sensor for total meter reading (Zählerstand)."""
+class ObiMeterSeriesSensorBase(ObiEnergySensorBase):
+    """Base for cumulative meter registers, reported in Wh.
 
-    _attr_unique_id = "obi_meter_reading"
+    The register only advances when the tracker reports a new reading, so
+    duplicate values are suppressed to avoid flat-lining long-term statistics.
+    """
+
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
-    _attr_translation_key = "meter_reading"
-    _attr_native_unit_of_measurement = "Wh"
+    _attr_native_unit_of_measurement = UnitOfEnergy.WATT_HOUR
+
+    _data_key: str
 
     def __init__(self, coordinator: ObiEnergyTrackerCoordinator) -> None:
         """Initialize the meter reading sensor."""
@@ -85,35 +96,100 @@ class ObiMeterReadingSensor(ObiEnergySensorBase):
 
     @property
     def native_value(self) -> float | None:
-        """Return the meter reading value."""
-        _LOGGER.debug(
-            "ObiMeterReadingSensor native_value called. Data: %s",
-            self.coordinator.data,
-        )
-        if (
-            self.coordinator.data
-            and "meter" in self.coordinator.data
-            and self.coordinator.data["meter"]
-        ):
-            meter_data = self.coordinator.data["meter"]
+        """Return the newest reading of the cumulative register."""
+        if not self.coordinator.data:
+            return None
+        return latest_value(self.coordinator.data.get(self._data_key))
 
-            # If it's a list, get the latest record
-            if isinstance(meter_data, list) and len(meter_data) > 0:
-                meter_data = meter_data[-1]
 
-            if not isinstance(meter_data, dict):
-                return None
+class ObiMeterReadingSensor(ObiMeterSeriesSensorBase):
+    """Sensor for total imported energy (Zählerstand)."""
 
-            # Look for "value" (if measure is energy) or "energy" directly
-            if "energy" in meter_data:
-                return meter_data["energy"]
-            if "value" in meter_data and meter_data.get("measure") == "energy":
-                return meter_data["value"]
-            # Fallback to "value" if present
-            if "value" in meter_data:
-                return meter_data["value"]
+    _attr_unique_id = "obi_meter_reading"
+    _attr_translation_key = "meter_reading"
+    _data_key = "meter"
 
-        return None
+
+class ObiMeterExportSensor(ObiMeterSeriesSensorBase):
+    """Sensor for total exported energy (feed-in register)."""
+
+    _attr_unique_id = "obi_meter_export"
+    _attr_translation_key = "meter_export"
+    _data_key = "meter_export"
+
+
+class ObiPowerSensorBase(ObiEnergySensorBase):
+    """Base for power derived by differentiating the meter register.
+
+    The API exposes no power measure at any resolution, so this is the average
+    power across the two newest meter samples (~5 minutes apart) rather than an
+    instantaneous reading.
+    """
+
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+    _attr_suggested_display_precision = 0
+
+    _data_key: str
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the derived power in watts."""
+        if not self.coordinator.data:
+            return None
+        value = self.coordinator.data.get(self._data_key)
+        return value if isinstance(value, (int, float)) else None
+
+
+class ObiPowerSensor(ObiPowerSensorBase):
+    """Sensor for current power draw."""
+
+    _attr_unique_id = "obi_power"
+    _attr_translation_key = "power"
+    _data_key = "power"
+
+
+class ObiExportPowerSensor(ObiPowerSensorBase):
+    """Sensor for current power fed back into the grid."""
+
+    _attr_unique_id = "obi_export_power"
+    _attr_translation_key = "export_power"
+    _data_key = "export_power"
+
+
+class ObiDailyEnergySensorBase(ObiEnergySensorBase):
+    """Base for energy totals accumulated since local midnight."""
+
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_unit_of_measurement = UnitOfEnergy.WATT_HOUR
+
+    _data_key: str
+
+    @property
+    def native_value(self) -> float | None:
+        """Return today's energy total."""
+        if not self.coordinator.data:
+            return None
+        value = self.coordinator.data.get(self._data_key)
+        return value if isinstance(value, (int, float)) else None
+
+
+class ObiDailyEnergySensor(ObiDailyEnergySensorBase):
+    """Sensor for energy consumed today."""
+
+    _attr_unique_id = "obi_daily_energy"
+    _attr_translation_key = "daily_energy"
+    _data_key = "daily_energy"
+
+
+class ObiDailyExportEnergySensor(ObiDailyEnergySensorBase):
+    """Sensor for energy exported today."""
+
+    _attr_unique_id = "obi_daily_export_energy"
+    _attr_translation_key = "daily_export_energy"
+    _data_key = "daily_export_energy"
 
 
 class ObiDeviceValueSensorBase(ObiEnergySensorBase):

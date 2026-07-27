@@ -33,6 +33,21 @@
       "meter_reading": {
         "name": "Zählerstand"
       },
+      "meter_export": {
+        "name": "Zählerstand (Einspeisung)"
+      },
+      "power": {
+        "name": "Leistung"
+      },
+      "export_power": {
+        "name": "Einspeiseleistung"
+      },
+      "daily_energy": {
+        "name": "Verbrauch heute"
+      },
+      "daily_export_energy": {
+        "name": "Einspeisung heute"
+      },
        "battery_level": {
          "name": "Batteriestand"
        },

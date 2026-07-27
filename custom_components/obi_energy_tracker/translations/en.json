@@ -33,6 +33,21 @@
             "meter_reading": {
                 "name": "Meter Reading"
             },
+            "meter_export": {
+                "name": "Meter Reading (Export)"
+            },
+            "power": {
+                "name": "Power"
+            },
+            "export_power": {
+                "name": "Export Power"
+            },
+            "daily_energy": {
+                "name": "Energy Today"
+            },
+            "daily_export_energy": {
+                "name": "Energy Exported Today"
+            },
             "battery_level": {
                 "name": "Battery Level"
             },
