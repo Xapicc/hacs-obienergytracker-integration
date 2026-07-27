@@ -11,7 +11,12 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from .api import ObiEnergyTrackerAPI, derive_power_w, sum_values
+from .api import (
+    ObiEnergyTrackerAPI,
+    derive_power_w,
+    hourly_energy_from_meter,
+    sum_values,
+)
 from .const import DOMAIN
 from .statistics import (
     STATISTIC_CONSUMPTION,
@@ -25,12 +30,9 @@ _LOGGER = logging.getLogger(__name__)
 # stays inside one sample period without the request volume getting silly.
 SCAN_INTERVAL = timedelta(minutes=3)
 
-# Device status and the daily/hourly aggregates cannot change faster than the
-# underlying meter samples, so they ride a slower cycle than the power
-# calculation.
+# Device status and the daily totals cannot change faster than the underlying
+# meter samples, so they ride a slower cycle than the power calculation.
 SLOW_REFRESH_INTERVAL = timedelta(minutes=5)
-
-DAYS_OF_HISTORY = 7
 
 
 class ObiEnergyTrackerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -58,8 +60,8 @@ class ObiEnergyTrackerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Fetch data from the API.
 
         Every cycle pulls the cumulative meter series and derives power from
-        it. Device status and the daily/hourly aggregates refresh on a slower
-        cycle.
+        it, and tops up long-term statistics. Device status and the daily
+        totals refresh on a slower cycle.
         """
         meter = await self.api.async_get_meter_data("energy")
         meter_export = await self.api.async_get_meter_data("negative_energy")
@@ -76,6 +78,10 @@ class ObiEnergyTrackerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         export_power = derive_power_w(meter_export)
         _LOGGER.debug("Derived power: %s W (export %s W)", power, export_power)
 
+        # Statistics come from the meter series that was just fetched, so this
+        # costs no extra requests.
+        await self._async_import_statistics(meter, meter_export)
+
         return {
             "meter": meter,
             "meter_export": meter_export,
@@ -83,7 +89,6 @@ class ObiEnergyTrackerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "export_power": export_power,
             "daily_energy": sum_values(self._slow_data.get("daily")),
             "daily_export_energy": sum_values(self._slow_data.get("daily_export")),
-            "hourly": self._slow_data.get("hourly"),
             "device": self._slow_data.get("device"),
         }
 
@@ -102,14 +107,10 @@ class ObiEnergyTrackerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         daily_export = await self.api.async_get_daily_data(
             start_of_day, "negative_energy"
         )
-        hourly = await self.api.async_get_hourly_data(num_days=DAYS_OF_HISTORY)
-        hourly_export = await self.api.async_get_hourly_data(
-            num_days=DAYS_OF_HISTORY, measure="negative_energy"
-        )
 
         # Keep the previous values on a failed refresh rather than blanking the
         # sensors; the next cycle retries.
-        if device is None and daily is None and hourly is None:
+        if device is None and daily is None:
             _LOGGER.debug("Slow refresh returned no data, keeping previous values")
             return
 
@@ -117,29 +118,24 @@ class ObiEnergyTrackerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "device": device,
             "daily": daily,
             "daily_export": daily_export,
-            "hourly": hourly,
         }
         self._slow_fetched_at = now
 
-        await self._async_import_statistics(hourly, hourly_export)
-
-    async def _async_import_statistics(
-        self, hourly: Any, hourly_export: Any
-    ) -> None:
-        """Feed the hourly series into long-term statistics.
+    async def _async_import_statistics(self, meter: Any, meter_export: Any) -> None:
+        """Feed hourly energy, derived from the meter register, into statistics.
 
         Failures here must not take the sensors down with them, so they are
         logged and swallowed.
         """
         for statistic_id, records in (
-            (STATISTIC_CONSUMPTION, hourly),
-            (STATISTIC_PRODUCTION, hourly_export),
+            (STATISTIC_CONSUMPTION, meter),
+            (STATISTIC_PRODUCTION, meter_export),
         ):
             if records is None:
                 continue
             try:
                 await async_import_hourly_statistics(
-                    self.hass, statistic_id, records
+                    self.hass, statistic_id, hourly_energy_from_meter(records)
                 )
             except (HomeAssistantError, KeyError, TypeError, ValueError) as err:
                 _LOGGER.warning(

@@ -31,7 +31,6 @@ from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from .api import parse_records
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -62,15 +61,18 @@ def _last_imported_hour(row: dict[str, Any]) -> datetime | None:
 async def async_import_hourly_statistics(
     hass: HomeAssistant,
     statistic_id: str,
-    records: Any,
+    hourly: list[tuple[datetime, float]],
 ) -> None:
-    """Import hour-aligned energy records as external statistics.
+    """Import per-hour energy totals as external statistics.
+
+    Takes (hour_start, energy_wh) pairs -- see hourly_energy_from_meter, which
+    derives them from the cumulative register because the API's hourly
+    resolution returns only a single aggregate record.
 
     Statistics carry a running sum, so each new hour is added on top of the
     total already stored rather than recomputed from the whole series.
     """
-    parsed = parse_records(records)
-    if not parsed:
+    if not hourly:
         return
 
     last_stats = await get_instance(hass).async_add_executor_job(
@@ -89,7 +91,7 @@ async def async_import_hourly_statistics(
     cutoff = dt_util.utcnow().replace(minute=0, second=0, microsecond=0)
 
     statistics: list[StatisticData] = []
-    for timestamp, value in parsed:
+    for timestamp, value in sorted(hourly):
         start = timestamp.replace(minute=0, second=0, microsecond=0)
         if start >= cutoff:
             continue

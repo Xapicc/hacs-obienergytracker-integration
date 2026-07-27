@@ -48,10 +48,15 @@ set up.
 
 ## Energy Dashboard
 
-The integration imports the hourly series into Home Assistant's long-term
-statistics, so the Energy dashboard gets correctly hour-aligned buckets and up
-to 7 days of backfilled history rather than only what has been polled since
-install.
+The integration writes hour-aligned energy totals into Home Assistant's
+long-term statistics, computed from the cumulative meter register. This gives
+the Energy dashboard buckets aligned to real clock hours rather than to
+whenever Home Assistant happened to poll.
+
+Backfill reaches back only as far as the meter window the integration
+requests (`METER_WINDOW_HOURS`, 6 hours by default) — not further. The API's
+`hourly` resolution looks like it should provide deeper history but does not;
+see below.
 
 To set it up, go to **Settings → Dashboards → Energy** and add:
 
@@ -65,10 +70,17 @@ These appear under statistics, not entities. Use them *instead of* the
 
 The `/historical-data/{bridge}/{device}/{resolution}` endpoint accepts only
 `hourly`, `meter`, `daily` and `monthly` as resolutions, and only `energy` and
-`negative_energy` as measures. Everything else returns HTTP 400. The `meter`
-resolution returns the cumulative register at roughly 5-minute intervals with
-1 Wh granularity; `scripts/probe_api.py` can be used to re-check this against
-your own account.
+`negative_energy` as measures. Everything else returns HTTP 400 — there is no
+power measure at any resolution.
+
+Only `meter` returns a usable series: the cumulative register at roughly
+5-minute intervals with 1 Wh granularity. The other resolutions return a
+**single aggregate record** covering the whole requested window, regardless of
+how long that window is, labelled with one bucket start. So `hourly` with a
+7-day window yields one record, not 168 — which is why hourly statistics are
+derived from the meter register instead.
+
+`scripts/probe_api.py` re-checks all of this against your own account.
 
 ---
 

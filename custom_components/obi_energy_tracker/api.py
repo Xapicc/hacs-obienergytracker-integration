@@ -74,6 +74,40 @@ def sum_values(records: Any) -> float | None:
     return sum(value for _timestamp, value in parsed)
 
 
+def hourly_energy_from_meter(records: Any) -> list[tuple[datetime, float]]:
+    """Convert a cumulative meter series into per-hour energy totals.
+
+    The API's hourly resolution returns a single aggregate record regardless of
+    the window requested, so it cannot be used to build an hourly series. The
+    meter register can: it is sampled about every 5 minutes with 1 Wh
+    granularity, and differencing consecutive readings gives the energy used
+    between them.
+
+    Each interval's delta is attributed to the hour the interval starts in.
+    With 5-minute samples that misplaces at most one sample either side of an
+    hour boundary, which is immaterial next to hourly totals.
+    """
+    parsed = parse_records(records)
+    if len(parsed) < 2:
+        return []
+
+    buckets: dict[datetime, float] = {}
+    for (earlier, previous_value), (later, value) in zip(parsed, parsed[1:]):
+        elapsed = (later - earlier).total_seconds()
+        delta = value - previous_value
+        if elapsed <= 0 or delta < 0:
+            # Duplicate timestamps, or the register was reset/corrected.
+            continue
+        if elapsed > MAX_SAMPLE_SECONDS:
+            # A gap this long means the tracker was offline; crediting the
+            # catch-up reading to a single hour would invent a spike.
+            continue
+        hour = earlier.replace(minute=0, second=0, microsecond=0)
+        buckets[hour] = buckets.get(hour, 0.0) + delta
+
+    return sorted(buckets.items())
+
+
 def derive_power_w(records: Any) -> float | None:
     """Derive average power in W from a cumulative Wh meter series.
 
