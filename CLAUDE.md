@@ -77,12 +77,25 @@ Auth: login POST returns a JWT; `bridge_id`/`device_id` come from decoding the J
 `accountId` and reading `/users/{id}`. `_authorized_get` refreshes the token pre-emptively
 (60s before `exp`), retries once on 401, and backs off on 429.
 
-**`coordinator.py`** — two-speed polling in one `DataUpdateCoordinator`. Every 3 minutes it
-fetches both meter series (import + export) and derives power. Device status and the daily
-totals refresh only every 5 minutes (`SLOW_REFRESH_INTERVAL`), and a failed slow refresh
-keeps the previous values rather than blanking sensors. Statistics import piggybacks on the
-meter data already fetched, so it costs no extra requests, and its failures are logged and
-swallowed so a recorder problem can't take the sensors down.
+**`coordinator.py`** — one `DataUpdateCoordinator` polling every 3 minutes: both meter series
+(import + export), derived power, device status, and the daily totals. Statistics import
+piggybacks on the meter data already fetched, so it costs no extra requests, and its failures
+are logged and swallowed so a recorder problem can't take the sensors down.
+
+`SLOW_REFRESH_INTERVAL` must stay **below** `SCAN_INTERVAL`. It is only ever tested on a poll
+tick, so a value at or above the poll period is never satisfied in time and rounds the
+refresh up to the following tick — it was 5 minutes tested every 3, which produced a
+6-minute cadence and visibly stale device fields. It survives only to stop bursts of manual
+refreshes multiplying requests.
+
+Two rules about not blanking good data, both learned from live incidents. `_async_update_slow_data`
+keeps values **per key**: three independent requests, and one failing says nothing about the
+others — the old all-or-nothing guard would drop `Energy Today` (a `TOTAL_INCREASING` sensor)
+to `unknown` whenever the daily call alone failed. And `_merge_device` carries the last known
+value into any field the backend returns as null, which it does intermittently for
+`connectionStrength` and `lastRecordReceivedAt` while `batteryLevel`/`isOnline` stay
+populated. Test falsey values when touching that merge: `isOnline` is legitimately `False`
+and a battery legitimately reads `0`, so it keys on `is not None`, never truthiness.
 
 **`statistics.py`** — imports hour-aligned totals as *external* statistics
 (`obi_energy_tracker:energy_consumption` / `:energy_production`), which is what makes the

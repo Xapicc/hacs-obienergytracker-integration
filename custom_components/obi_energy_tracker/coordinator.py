@@ -30,9 +30,14 @@ _LOGGER = logging.getLogger(__name__)
 # stays inside one sample period without the request volume getting silly.
 SCAN_INTERVAL = timedelta(minutes=3)
 
-# Device status and the daily totals cannot change faster than the underlying
-# meter samples, so they ride a slower cycle than the power calculation.
-SLOW_REFRESH_INTERVAL = timedelta(minutes=5)
+# Device status and the daily totals refresh on every cycle, alongside the
+# meter. This has to stay below SCAN_INTERVAL: the gate is only ever tested on
+# a poll tick, so an interval at or above the poll period is never satisfied in
+# time and silently rounds the refresh up to the following tick -- five minutes
+# tested every three produced a six-minute cadence, and device fields sat
+# visibly stale in between. What remains guards against bursts of manual
+# refreshes multiplying the request count, not against the normal schedule.
+SLOW_REFRESH_INTERVAL = timedelta(minutes=2)
 
 
 class ObiEnergyTrackerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -59,9 +64,9 @@ class ObiEnergyTrackerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from the API.
 
-        Every cycle pulls the cumulative meter series and derives power from
-        it, and tops up long-term statistics. Device status and the daily
-        totals refresh on a slower cycle.
+        Every cycle pulls the cumulative meter series, derives power from it,
+        tops up long-term statistics, and refreshes device status and the daily
+        totals. Each of the underlying values survives a failure of the others.
         """
         now = dt_util.utcnow()
         meter = await self.api.async_get_meter_data("energy")
@@ -96,7 +101,7 @@ class ObiEnergyTrackerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
     async def _async_update_slow_data(self, now: datetime) -> None:
-        """Refresh device status and aggregates, and top up statistics."""
+        """Refresh device status and the daily aggregates."""
         if (
             self._slow_fetched_at is not None
             and now - self._slow_fetched_at < SLOW_REFRESH_INTERVAL
@@ -110,18 +115,49 @@ class ObiEnergyTrackerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             start_of_day, "negative_energy"
         )
 
-        # Keep the previous values on a failed refresh rather than blanking the
-        # sensors; the next cycle retries.
-        if device is None and daily is None:
+        if device is not None:
+            device = self._merge_device(device)
+
+        # Kept per key rather than all-or-nothing. These are three independent
+        # requests, and one of them failing says nothing about the other two --
+        # writing None into the lot would blank sensors that had just been
+        # answered correctly. Energy Today is the one that matters: it is
+        # TOTAL_INCREASING, so dropping it to unknown puts a hole in a series
+        # that is supposed to only ever climb.
+        fetched = {"device": device, "daily": daily, "daily_export": daily_export}
+        refreshed = {key: value for key, value in fetched.items() if value is not None}
+
+        if not refreshed:
             _LOGGER.debug("Slow refresh returned no data, keeping previous values")
             return
 
-        self._slow_data = {
-            "device": device,
-            "daily": daily,
-            "daily_export": daily_export,
-        }
+        self._slow_data = {**self._slow_data, **refreshed}
         self._slow_fetched_at = now
+
+    def _merge_device(self, device: dict[str, Any]) -> dict[str, Any]:
+        """Carry the last known value into any field the API left null.
+
+        The backend intermittently answers with connectionStrength and
+        lastRecordReceivedAt set to null while batteryLevel and isOnline are
+        still populated -- the request succeeded, the fields just came back
+        empty. Publishing that through blanks those two sensors to `unknown`
+        until the next cycle, and the reading from three minutes ago is a
+        better answer than no reading at all.
+
+        This cannot hide a tracker that has genuinely stopped reporting:
+        online status comes from the same payload, and the power sensors age
+        out on their own once readings stop arriving.
+        """
+        previous = self._slow_data.get("device")
+        if not isinstance(previous, dict):
+            return device
+
+        # `is not None` rather than truthiness -- isOnline is legitimately
+        # False, and a battery can legitimately read 0.
+        return {
+            key: value if value is not None else previous.get(key)
+            for key, value in device.items()
+        }
 
     async def _async_import_statistics(self, meter: Any, meter_export: Any) -> None:
         """Feed hourly energy, derived from the meter register, into statistics.
