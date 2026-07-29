@@ -134,6 +134,16 @@ class ObiPowerSensorBase(ObiEnergySensorBase):
     _data_key: str
 
     @property
+    def available(self) -> bool:
+        """Report unavailable whenever power could not be derived.
+
+        A tracker that has gone offline is the case that matters: the entity
+        has to stop reporting, because leaving the last figure on show reads as
+        a live measurement of a house that is no longer being measured.
+        """
+        return super().available and self.native_value is not None
+
+    @property
     def native_value(self) -> float | None:
         """Return the derived power in watts."""
         if not self.coordinator.data:

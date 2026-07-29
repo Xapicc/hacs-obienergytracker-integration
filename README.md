@@ -46,6 +46,12 @@ rather than guessing when readings are too far apart, when the register goes
 backwards, or during the backfill jump that happens when a tracker is first
 set up.
 
+It also goes unavailable once the newest reading is more than 30 minutes old,
+which is what happens when the tracker drops off the network. The API keeps
+serving the same records for hours afterwards, and those records still
+differentiate perfectly well — so without the age check the last figure before
+the outage would sit there looking like a live measurement.
+
 ## Energy Dashboard
 
 The integration writes hour-aligned energy totals into Home Assistant's
@@ -57,6 +63,15 @@ Backfill reaches back only as far as the meter window the integration
 requests (`METER_WINDOW_HOURS`, 6 hours by default) — not further. The API's
 `hourly` resolution looks like it should provide deeper history but does not;
 see below.
+
+Energy used while the tracker was offline is not lost. The register is read
+from the physical meter, so it keeps advancing during an outage, and the
+catch-up reading afterwards carries the whole missing amount. That amount is
+credited to the hour the tracker came back rather than spread across the hours
+it really spans — daily and monthly totals come out right, but expect a single
+tall bar at the point of recovery. Outages longer than the 6-hour meter window
+cannot be recovered, because both ends of the gap have to be in the same
+window for the difference to be visible.
 
 To set it up, go to **Settings → Dashboards → Energy** and add:
 

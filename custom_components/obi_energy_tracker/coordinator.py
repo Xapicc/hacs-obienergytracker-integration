@@ -63,19 +63,22 @@ class ObiEnergyTrackerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         it, and tops up long-term statistics. Device status and the daily
         totals refresh on a slower cycle.
         """
+        now = dt_util.utcnow()
         meter = await self.api.async_get_meter_data("energy")
         meter_export = await self.api.async_get_meter_data("negative_energy")
 
         if meter is None and meter_export is None and self._slow_fetched_at is not None:
             raise UpdateFailed("No meter data returned from Obi EnergyTracker API")
 
-        await self._async_update_slow_data()
+        await self._async_update_slow_data(now)
 
         if meter is None and not self._slow_data:
             raise UpdateFailed("No data returned from Obi EnergyTracker API")
 
-        power = derive_power_w(meter)
-        export_power = derive_power_w(meter_export)
+        # Passing the clock in matters: a tracker that has dropped off keeps
+        # being served its last records, and power has to age out with them.
+        power = derive_power_w(meter, now)
+        export_power = derive_power_w(meter_export, now)
         _LOGGER.debug("Derived power: %s W (export %s W)", power, export_power)
 
         # Statistics come from the meter series that was just fetched, so this
@@ -92,9 +95,8 @@ class ObiEnergyTrackerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "device": self._slow_data.get("device"),
         }
 
-    async def _async_update_slow_data(self) -> None:
+    async def _async_update_slow_data(self, now: datetime) -> None:
         """Refresh device status and aggregates, and top up statistics."""
-        now = dt_util.utcnow()
         if (
             self._slow_fetched_at is not None
             and now - self._slow_fetched_at < SLOW_REFRESH_INTERVAL

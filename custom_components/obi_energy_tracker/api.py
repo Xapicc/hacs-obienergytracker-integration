@@ -28,6 +28,11 @@ MIN_SAMPLE_SECONDS = 30
 # Past this the sensor has gone quiet, and an "average power" spanning the
 # outage would be meaningless.
 MAX_SAMPLE_SECONDS = 1800
+# While the tracker is offline the API keeps serving the same records, so the
+# newest reading has to be checked against the clock as well as against its
+# predecessor -- two stale readings five minutes apart still divide cleanly and
+# would report hours-old power as if it were current.
+MAX_READING_AGE_SECONDS = 1800
 # Above this it is a backfill artifact rather than consumption -- when a
 # tracker is first set up it replays its accumulated total in one jump.
 MAX_PLAUSIBLE_POWER_W = 50000
@@ -86,6 +91,11 @@ def hourly_energy_from_meter(records: Any) -> list[tuple[datetime, float]]:
     Each interval's delta is attributed to the hour the interval starts in.
     With 5-minute samples that misplaces at most one sample either side of an
     hour boundary, which is immaterial next to hourly totals.
+
+    Energy accumulated while the tracker was offline is kept rather than
+    discarded: the register is read from the physical meter, so it carries on
+    advancing regardless, and the catch-up reading is real consumption. See the
+    gap branch below for where it lands.
     """
     parsed = parse_records(records)
     if len(parsed) < 2:
@@ -99,28 +109,49 @@ def hourly_energy_from_meter(records: Any) -> list[tuple[datetime, float]]:
             # Duplicate timestamps, or the register was reset/corrected.
             continue
         if elapsed > MAX_SAMPLE_SECONDS:
-            # A gap this long means the tracker was offline; crediting the
-            # catch-up reading to a single hour would invent a spike.
-            continue
-        hour = earlier.replace(minute=0, second=0, microsecond=0)
+            # The tracker was offline for this stretch. The meter kept running,
+            # so the catch-up reading is genuine consumption and dropping it
+            # loses that energy from the Energy dashboard permanently.
+            if delta / (elapsed / 3600) > MAX_PLAUSIBLE_POWER_W:
+                # Except at first setup, where the tracker replays its whole
+                # accumulated total in one jump. That is history, not usage.
+                continue
+            # Credited to the hour it arrived in. Spreading it over the hours
+            # it actually spans would read better on the dashboard but would
+            # aim at hours already imported, which are never revisited -- so
+            # the total, which is what has to be right, would come up short.
+            hour = later.replace(minute=0, second=0, microsecond=0)
+        else:
+            hour = earlier.replace(minute=0, second=0, microsecond=0)
         buckets[hour] = buckets.get(hour, 0.0) + delta
 
     return sorted(buckets.items())
 
 
-def derive_power_w(records: Any) -> float | None:
+def derive_power_w(records: Any, now: datetime | None = None) -> float | None:
     """Derive average power in W from a cumulative Wh meter series.
 
     The API has no power measure at any resolution, so power comes from
     differentiating consecutive readings of the cumulative register. Walks
     backwards from the newest record until it finds a sample far enough apart
     to divide by safely.
+
+    Returns None once the newest reading itself has gone stale. The API serves
+    the same window for hours after a tracker drops off, so without a check
+    against the clock the last-known figure would keep being republished as the
+    current draw for as long as those records stay in the window.
     """
     parsed = parse_records(records)
     if len(parsed) < 2:
         return None
 
     newest_time, newest_value = parsed[-1]
+
+    if now is None:
+        now = datetime.now(timezone.utc)
+    if (now - newest_time).total_seconds() > MAX_READING_AGE_SECONDS:
+        return None
+
     for timestamp, value in reversed(parsed[:-1]):
         elapsed = (newest_time - timestamp).total_seconds()
         if elapsed < MIN_SAMPLE_SECONDS:
