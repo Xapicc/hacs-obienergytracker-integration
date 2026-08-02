@@ -65,7 +65,7 @@ records, meaningless divisions across an outage, and the one-off backfill jump a
 newly-registered tracker emits — each rejection returns `None`/skips rather than guessing.
 
 Two of those deserve care, because an offline tracker is not the same thing as missing data:
-the API keeps serving the same 6-hour window for hours afterwards. `derive_power_w` therefore
+the API keeps serving the same meter window for hours afterwards. `derive_power_w` therefore
 takes a `now` and ages out on `MAX_READING_AGE_SECONDS`, since stale records still
 differentiate cleanly and would otherwise republish pre-outage power as current. Conversely
 `hourly_energy_from_meter` *keeps* the energy behind a gap — the register is read from the
@@ -102,7 +102,10 @@ and a battery legitimately reads `0`, so it keys on `is not None`, never truthin
 Energy dashboard bucket by real clock hours instead of by poll time. Two invariants: the
 current (still-accumulating) hour is never imported, and each import continues the running
 `sum` read back via `get_last_statistics` rather than recomputing from the series. Backfill
-therefore reaches back only as far as `METER_WINDOW_HOURS`.
+therefore reaches back only as far as `METER_WINDOW_HOURS`, which is also the longest
+outage the Energy dashboard can recover from — a gap heals only when both of its ends fall
+inside one request. It was raised from 6 to 24 hours after a 10-hour DNS outage cost a
+morning of statistics that the API could still have supplied.
 
 This file carries deliberate cross-version shims — `mean_type` vs deprecated `has_mean`,
 `unit_class`, and `start` being either a `datetime` or a float timestamp. Keep the
@@ -136,7 +139,10 @@ unavailable rather than lingering on the last value.
 
 ## Loose ends worth knowing
 
-- `ObiEnergyTrackerOptionsFlow` exists and `async_supports_options_flow` returns `True`, but
-  no `async_get_options_flow` wires it up, and the flow shows an empty form.
+- There is deliberately no options flow. An earlier version overrode
+  `async_supports_options_flow` to `True` without providing `async_get_options_flow`, which
+  put a Configure button on the integration card that answered every click with
+  `{"message":"Invalid handler specified"}` — the base `ConfigFlow.async_get_options_flow`
+  raises `UnknownHandler`. Don't re-add one half of that pair.
 - `DEFAULT_SCAN_INTERVAL` and the `ATTR_*` constants in `const.py` are unused; the real
   intervals are `SCAN_INTERVAL`/`SLOW_REFRESH_INTERVAL` in `coordinator.py`.

@@ -60,7 +60,7 @@ the Energy dashboard buckets aligned to real clock hours rather than to
 whenever Home Assistant happened to poll.
 
 Backfill reaches back only as far as the meter window the integration
-requests (`METER_WINDOW_HOURS`, 6 hours by default) — not further. The API's
+requests (`METER_WINDOW_HOURS`, 24 hours by default) — not further. The API's
 `hourly` resolution looks like it should provide deeper history but does not;
 see below.
 
@@ -69,9 +69,9 @@ from the physical meter, so it keeps advancing during an outage, and the
 catch-up reading afterwards carries the whole missing amount. That amount is
 credited to the hour the tracker came back rather than spread across the hours
 it really spans — daily and monthly totals come out right, but expect a single
-tall bar at the point of recovery. Outages longer than the 6-hour meter window
-cannot be recovered, because both ends of the gap have to be in the same
-window for the difference to be visible.
+tall bar at the point of recovery. Outages longer than the meter window cannot
+be recovered, because both ends of the gap have to be in the same window for
+the difference to be visible.
 
 To set it up, go to **Settings → Dashboards → Energy** and add:
 

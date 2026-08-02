@@ -17,9 +17,14 @@ _LOGGER = logging.getLogger(__name__)
 LOGIN_URL = "https://www.obi.de/regi/auth/api/public/login"
 ENERGY_TRACKING_URL = "https://energy-tracking-backend.prod-eks.dbs.obi.solutions"
 
-# The meter register is sampled roughly every 5 minutes. A 6-hour window keeps
-# a useful history without the payload getting large (~70 records).
-METER_WINDOW_HOURS = 6
+# The meter register is sampled roughly every 5 minutes, so this is ~290
+# records per request. The window is what bounds outage recovery: a gap only
+# heals if both of its ends land in the same request, so anything shorter than
+# this heals itself and anything longer is lost from the Energy dashboard for
+# good, because hourly_energy_from_meter has nothing to difference against and
+# imported hours are never revisited. 6 hours lost a morning to a DNS outage.
+# Verified against the live API with scripts/probe_api.py meter --hours 24.
+METER_WINDOW_HOURS = 24
 
 # Pairs closer together than this are duplicate records (the API occasionally
 # emits two a second apart); dividing by such a tiny interval turns 1 Wh of

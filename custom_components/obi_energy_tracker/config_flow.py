@@ -7,12 +7,7 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.config_entries import (
-    ConfigEntry,
-    ConfigFlow,
-    ConfigFlowResult,
-    OptionsFlow,
-)
+from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
@@ -36,12 +31,12 @@ class ObiEnergyTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
     MINOR_VERSION = 1
 
-    @staticmethod
-    def async_supports_options_flow(
-        config_entry: ConfigEntry,
-    ) -> bool:
-        """Return options flow support for this handler."""
-        return True
+    # No async_supports_options_flow override here on purpose. Claiming support
+    # without also providing async_get_options_flow puts a Configure button on
+    # the integration card that cannot work: HA answers the click from the base
+    # ConfigFlow, which raises UnknownHandler, and the frontend shows
+    # "Invalid handler specified". There are no options to configure anyway --
+    # credentials are re-entered by removing and re-adding the entry.
 
     async def async_step_discovery(  # pylint: disable=unused-argument
         self, discovery_info: dict[str, Any]
@@ -86,13 +81,3 @@ class ObiEnergyTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=STEP_USER_DATA_SCHEMA,
             errors=errors,
         )
-
-
-class ObiEnergyTrackerOptionsFlow(OptionsFlow):
-    """Handle options flow for Obi EnergyTracker."""
-
-    async def async_step_init(  # pylint: disable=unused-argument
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Manage the options."""
-        return self.async_show_form(step_id="init")
